@@ -1,0 +1,5 @@
+{
+    "sketch": "project_code\\project_code.ino",
+    "configuration": "cpu=atmega2560",
+    "board": "arduino:avr:mega"
+}
