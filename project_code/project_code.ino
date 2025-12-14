@@ -67,9 +67,9 @@ void setRedLed() {
 /////
 // Fan motor
 /////
-#define FAN_ENABLE_PIN  9 
-#define FAN_INT1_BIT    6
-#define FAN_INT2_BIT    7
+#define FAN_ENABLE_PIN  10 // OC2A - PB4
+#define FAN_INT1_BIT    6 // PB6
+#define FAN_INT2_BIT    7 // PB7
 
 #define FAN_SPEED   200
 
@@ -100,7 +100,7 @@ volatile unsigned char* my_adcsra = (unsigned char*)0x7A;
 volatile unsigned char* my_adcl = (unsigned char*)0x78;
 volatile unsigned char* my_adch = (unsigned char*)0x79;
 
-#define WATER_LOW_THRESHOLD 315
+#define WATER_LOW_THRESHOLD 200
 
 void adc_init() {
     *my_adcsra |= 0x80;
@@ -200,7 +200,7 @@ void stepperInit() {
 /////
 // DHT11 & LCD
 /////
-#define DHT_PIN  10
+#define DHT_PIN  55
 #define DHT_TYPE DHT11
 
 DHT dht(DHT_PIN, DHT_TYPE);
@@ -209,14 +209,29 @@ float currentTempC = 0;
 float currentHumidity = 0;
 unsigned long lastDHTRead = 0;
 
-#define TEMP_HIGH_THRESHOLD 25.0
+#define TEMP_HIGH_THRESHOLD 10.0
 #define DHT_INTERVAL        60000UL
 
 bool tempAboveThreshold() {
     return currentTempC > TEMP_HIGH_THRESHOLD;
 }
 
-LiquidCrystal lcd(11, 12, 4, 5, 6, 7);
+void updateTempHumidity() {
+    unsigned long now = millis();
+    if(now - lastDHTRead < DHT_INTERVAL) return;
+
+    lastDHTRead = now;
+
+    float t = dht.readTemperature();
+    float h = dht.readHumidity();
+
+    if(!isnan(t) && !isnan(h)) {
+        currentTempC = t;
+        currentHumidity = h;
+    }
+}
+
+LiquidCrystal lcd(49, 48, 47, 46, 45, 44);
 
 /////
 // ISR fxns
@@ -253,6 +268,26 @@ void handleISRFlags() {
 // setup() and loop()
 /////
 void setup() {
+    gpioInit();
+    volatile unsigned char* port_e = (unsigned char*)0x2E;
+    *port_e |= (1 << 4) | (1 << 5);
+    fanInit();
+    adc_init();
+    U0init(9600);
+    uartPrint("UART OK\n");
+    rtcInit();
+    stepperInit();
+    dht.begin();
+    lcd.begin(16, 2);
+    lcd.setCursor(0,0);
+    lcd.print("LCD OK");
+
+    attachInterrupt(digitalPinToInterrupt(2), startISR, FALLING);
+    attachInterrupt(digitalPinToInterrupt(3), resetISR, FALLING);
+}
+
+void loop() {
+    updateTempHumidity();
     handleISRFlags();
 
     switch (currentState) {
@@ -279,8 +314,4 @@ void setup() {
             fanOff();
             break;
     }
-}
-
-void loop() {
-    
 }
