@@ -131,14 +131,156 @@ bool isWaterLow() {
 /////
 // UART
 /////
+#define TBE 0x20
 
+volatile unsigned char* my_ucsr0a = (unsigned char*)0x00C0;
+volatile unsigned char* my_ucsr0b = (unsigned char*)0x00C1;
+volatile unsigned char* my_ucsr0c = (unsigned char*)0x00C2;
+volatile unsigned int* my_ubrr0 = (unsigned int*)0x00C4;
+volatile unsigned char* my_udr0 = (unsigned char*)0x00C6;
 
-// Arduino setup fxn
-void setup() {
-
+void U0init(unsigned long baud) {
+    unsigned int tbaud = (16000000/16/baud) - 1;
+    *my_ucsr0a = 0x20;
+    *my_ucsr0b = 0x18;
+    *my_ucsr0c = 0x06;
+    *my_ubrr0 = tbaud;
 }
 
-// Arduino loop fxn
+void U0putchar(unsigned char c) {
+    while(!(*my_ucsr0a & TBE));
+    *my_udr0 = c;
+}
+
+void uartPrint(const char* s) {
+    while(*s) U0putchar(*s++);
+}
+
+/////
+// RTC
+/////
+RTC_DS1307 rtc;
+
+void rtcInit() {
+    rtc.begin();
+    if(!rtc.isrunning()) {
+        rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+    }
+}
+
+void logEvent(const char* msg) {
+    DateTime now = rtc.now();
+    char buf[64];
+    snprintf(buf, sizeof(buf),
+        "[%04d-%02d-%02d %02d:%02d:%02d] %s\n",
+        now.year(), now.month(), now.day(),
+        now.hour(), now.minute(), now.second(), msg);
+    uartPrint(buf);
+}
+
+/////
+// Stepper
+/////
+#define STEPS_PER_REV 2048
+#define STEPPER_PIN_1 22
+#define STEPPER_PIN_2 24
+#define STEPPER_PIN_3 26
+#define STEPPER_PIN_4 28
+
+Stepper ventStepper(STEPS_PER_REV,
+    STEPPER_PIN_1, STEPPER_PIN_3,
+    STEPPER_PIN_2, STEPPER_PIN_4);
+
+int currentVentStep = 0;
+
+void stepperInit() {
+    ventStepper.setSpeed(10);
+}
+
+/////
+// DHT11 & LCD
+/////
+#define DHT_PIN  10
+#define DHT_TYPE DHT11
+
+DHT dht(DHT_PIN, DHT_TYPE);
+
+float currentTempC = 0;
+float currentHumidity = 0;
+unsigned long lastDHTRead = 0;
+
+#define TEMP_HIGH_THRESHOLD 25.0
+#define DHT_INTERVAL        60000UL
+
+bool tempAboveThreshold() {
+    return currentTempC > TEMP_HIGH_THRESHOLD;
+}
+
+LiquidCrystal lcd(11, 12, 4, 5, 6, 7);
+
+/////
+// ISR fxns
+/////
+void startISR() {
+    startPressed = true;
+}
+void resetISR() {
+    resetPressed = true;
+}
+
+/////
+// State machine logic
+/////
+void transitionTo(CoolerState next) {
+    if(currentState == next) return;
+    fanOff();
+    logEvent("STATE CHANGE");
+    currentState = next;
+}
+
+void handleISRFlags() {
+    if(startPressed && currentState == STATE_DISABLED) {
+        startPressed = false;
+        transitionTo(STATE_IDLE);
+    }
+    if(resetPressed && currentState == STATE_ERROR && !isWaterLow()) {
+        resetPressed = false;
+        transitionTo(STATE_IDLE);
+    } 
+}
+
+/////
+// setup() and loop()
+/////
+void setup() {
+    handleISRFlags();
+
+    switch (currentState) {
+        case STATE_DISABLED:
+            setYellowLed();
+            fanOff();
+            break;
+        
+        case STATE_IDLE:
+            setGreenLed();
+            fanOff();
+            if(isWaterLow()) transitionTo(STATE_ERROR);
+            else if(tempAboveThreshold()) transitionTo(STATE_RUNNING);
+            break;
+            
+        case STATE_RUNNING:
+            fanOn();
+            if(isWaterLow()) transitionTo(STATE_ERROR);
+            else if(!tempAboveThreshold()) transitionTo(STATE_IDLE);
+            break;
+        
+        case STATE_ERROR:
+            setRedLed();
+            fanOff();
+            break;
+    }
+}
+
 void loop() {
     
 }
